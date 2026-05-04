@@ -1,0 +1,333 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GNARS — 40x40</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+    color: #888;
+  }
+  h1 span { color: #FAE777; }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    max-width: 600px;
+    width: 100%;
+  }
+
+  .output {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .output.visible { display: flex; }
+
+  .main-preview {
+    image-rendering: pixelated;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    width: 400px;
+    height: 400px;
+  }
+
+  .row {
+    display: flex;
+    gap: 16px;
+    align-items: flex-end;
+  }
+  .small-preview {
+    image-rendering: pixelated;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+  }
+  .circle-preview {
+    image-rendering: pixelated;
+    border: 1px solid #2a2a2a;
+    border-radius: 50%;
+    width: 160px;
+    height: 160px;
+  }
+  .label {
+    font-size: 9px;
+    color: #666;
+    text-align: center;
+    margin-top: 4px;
+  }
+
+  .input-area {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .btn {
+    padding: 10px 20px;
+    font-size: 12px;
+    font-family: inherit;
+    background: #1e1e1e;
+    border: 1px solid #2a2a2a;
+    color: #e0e0e0;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn:hover { border-color: #FAE777; color: #FAE777; }
+  .btn input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  }
+  .btn-accent {
+    background: #FAE77711;
+    border-color: #FAE777;
+    color: #FAE777;
+  }
+
+
+  .cam-ui {
+    display: none;
+    gap: 12px;
+    align-items: center;
+  }
+
+  video { display: none; }
+
+</style>
+</head>
+<body>
+
+<div class="container">
+  <svg width="18" height="18" viewBox="0 0 3 3" style="margin-bottom:8px;">
+    <rect x="0" y="0" width="1" height="1" fill="#FAE777"/>
+    <rect x="2" y="0" width="1" height="1" fill="#FAE777"/>
+    <rect x="0" y="1" width="1" height="1" fill="#FAE777"/>
+    <rect x="1" y="1" width="1" height="1" fill="#EC9745"/>
+    <rect x="2" y="1" width="1" height="1" fill="#EC9745"/>
+    <rect x="0" y="2" width="1" height="1" fill="#FAE777"/>
+    <rect x="1" y="2" width="1" height="1" fill="#FAE777"/>
+    <rect x="2" y="2" width="1" height="1" fill="#EC9745"/>
+  </svg>
+  <h1><span>GNARS</span> 40x40</h1>
+
+
+  <div class="output" id="output">
+    <canvas class="main-preview" id="mainCanvas" width="400" height="400"></canvas>
+    <div class="row">
+      <div>
+        <canvas class="small-preview" id="prev1x" width="40" height="40"></canvas>
+        <div class="label">1x</div>
+      </div>
+      <div>
+        <canvas class="small-preview" id="prevEink" width="160" height="160"></canvas>
+        <div class="label">e-ink</div>
+      </div>
+      <div>
+        <canvas class="circle-preview" id="prevCircle" width="160" height="160"></canvas>
+        <div class="label">pfp</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="btn">
+      Upload image
+      <input type="file" accept="image/*" onchange="handleFile(this.files[0])">
+    </div>
+    <button class="btn" id="camBtn" onclick="toggleCam()">Webcam</button>
+    <button class="btn btn-accent" id="dlBtn" onclick="download()" style="display:none">Download</button>
+  </div>
+
+  <div class="cam-ui" id="camUI">
+    <button class="btn btn-accent" onclick="capture()">Capture</button>
+    <button class="btn" onclick="flipCam()">Flip</button>
+    <button class="btn" onclick="stopCam()">Cancel</button>
+  </div>
+
+  <video id="video" autoplay playsinline muted></video>
+</div>
+
+<script>
+const W = 40, H = 40;
+
+const PAL = [
+  { r: 0xFA, g: 0xE7, b: 0x77, lum: 0.299*0xFA + 0.587*0xE7 + 0.114*0x77 },
+  { r: 0xEC, g: 0x97, b: 0x45, lum: 0.299*0xEC + 0.587*0x97 + 0.114*0x45 },
+  { r: 0x1C, g: 0x1C, b: 0x1C, lum: 0.299*0x1C + 0.587*0x1C + 0.114*0x1C },
+];
+
+let camStream = null;
+let camRAF = null;
+let lastImageData = null;
+
+function processImage(img) {
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tc = tmp.getContext('2d');
+  tc.imageSmoothingEnabled = true;
+  tc.imageSmoothingQuality = 'high';
+  const srcSize = Math.min(img.width, img.height);
+  tc.drawImage(img, (img.width - srcSize) / 2, (img.height - srcSize) / 2, srcSize, srcSize, 0, 0, W, H);
+  lastImageData = tc.getImageData(0, 0, W, H);
+  renderOutput(lastImageData);
+}
+
+function renderOutput(imageData) {
+  const pixels = imageData.data;
+
+  // Convert to luminance
+  const lum = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    lum[i] = 0.299 * pixels[i*4] + 0.587 * pixels[i*4+1] + 0.114 * pixels[i*4+2];
+  }
+
+  // Auto-levels: percentile stretch
+  const sorted = [...lum].sort((a, b) => a - b);
+  const lo = sorted[Math.floor(lum.length * 0.02)];
+  const hi = sorted[Math.floor(lum.length * 0.98)];
+  const range = hi - lo || 1;
+
+  // Normalize + S-curve + quantize to 3 colors
+  const result = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    let v = ((lum[i] - lo) / range) * 255;
+    v = Math.max(0, Math.min(255, v));
+    const t = v / 255;
+    v = (t * t * (3 - 2 * t)) * 255;
+    result[i] = v > 170 ? 0 : v > 85 ? 1 : 2;
+  }
+
+  // Render
+  const mainCtx = document.getElementById('mainCanvas').getContext('2d');
+  const p1Ctx = document.getElementById('prev1x').getContext('2d');
+  const einkCtx = document.getElementById('prevEink').getContext('2d');
+  const circCtx = document.getElementById('prevCircle').getContext('2d');
+
+  mainCtx.clearRect(0, 0, 400, 400);
+  p1Ctx.clearRect(0, 0, 40, 40);
+  einkCtx.fillStyle = '#e8e8e0';
+  einkCtx.fillRect(0, 0, 160, 160);
+  circCtx.clearRect(0, 0, 160, 160);
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const c = PAL[result[y * W + x]];
+      const col = `rgb(${c.r},${c.g},${c.b})`;
+
+      mainCtx.fillStyle = col;
+      mainCtx.fillRect(x * 10, y * 10, 10, 10);
+
+      p1Ctx.fillStyle = col;
+      p1Ctx.fillRect(x, y, 1, 1);
+
+      // e-ink: map yellow→white, orange→mid gray, dark→near black
+      const el = [245, 140, 30][result[y * W + x]];
+      einkCtx.fillStyle = `rgb(${el},${el},${el})`;
+      einkCtx.fillRect(x * 4, y * 4, 4, 4);
+
+      circCtx.fillStyle = col;
+      circCtx.fillRect(x * 4, y * 4, 4, 4);
+    }
+  }
+
+  document.getElementById('output').classList.add('visible');
+  document.getElementById('dlBtn').style.display = '';
+}
+
+function download() {
+  const c = document.createElement('canvas');
+  c.width = 1600; c.height = 1600;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(document.getElementById('prev1x'), 0, 0, 1600, 1600);
+  const a = document.createElement('a');
+  a.download = 'gnars-40x40.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+}
+
+function handleFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const img = new Image();
+  img.onload = () => processImage(img);
+  img.src = URL.createObjectURL(file);
+}
+
+function toggleCam() {
+  if (camStream) { stopCam(); return; }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: facingMode, width: { ideal: 640 }, height: { ideal: 640 } } })
+    .then(stream => {
+      camStream = stream;
+      const video = document.getElementById('video');
+      video.srcObject = stream;
+      video.play();
+      document.getElementById('camUI').style.display = 'flex';
+      document.getElementById('camBtn').textContent = 'Live';
+      video.onloadeddata = () => camLoop();
+    })
+    .catch(err => alert('Camera error: ' + err.message));
+}
+
+function stopCam() {
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  if (camRAF) cancelAnimationFrame(camRAF);
+  camRAF = null;
+  document.getElementById('video').srcObject = null;
+  document.getElementById('camUI').style.display = 'none';
+  document.getElementById('camBtn').textContent = 'Webcam';
+}
+
+function camLoop() {
+  if (!camStream) return;
+  const video = document.getElementById('video');
+  if (video.readyState < 2) { camRAF = requestAnimationFrame(camLoop); return; }
+
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tc = tmp.getContext('2d');
+  tc.imageSmoothingEnabled = true;
+  tc.imageSmoothingQuality = 'high';
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const srcSize = Math.min(vw, vh);
+  if (facingMode === 'user') { tc.translate(W, 0); tc.scale(-1, 1); }
+  tc.drawImage(video, (vw - srcSize) / 2, (vh - srcSize) / 2, srcSize, srcSize, 0, 0, W, H);
+  tc.setTransform(1, 0, 0, 1, 0, 0);
+
+  lastImageData = tc.getImageData(0, 0, W, H);
+  renderOutput(lastImageData);
+  camRAF = requestAnimationFrame(camLoop);
+}
+
+function capture() {
+  stopCam();
+}
+
+let facingMode = 'user';
+function flipCam() {
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  stopCam();
+  toggleCam();
+}
+</script>
+</body>
+</html>
